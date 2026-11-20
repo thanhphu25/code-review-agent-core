@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=75.8.2"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "code-review-benchmark"
+version = "0.1.0"
+description = "Standalone LangGraph agent for evaluating code review and code context providers"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "langgraph==1.2.24",
+    "pydantic>=2.11,<3",
+]
+
+[project.scripts]
+review-benchmark = "review_benchmark.cli:main"
+
+[tool.setuptools]
+packages = ["review_benchmark"]
+
+[tool.setuptools.package-dir]
+review_benchmark = "."
