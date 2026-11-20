@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Code Review Agent</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <div class="workspace">
+    <aside class="sidebar">
+      <div class="brand"><span class="brand-mark" aria-hidden="true">⌘</span><span>Code Review Agent</span></div>
+      <div class="side-heading"><h2>Repository</h2><button id="add-project" type="button" class="small" aria-label="Thêm repository">+</button></div>
+      <nav id="projects" aria-label="Các repository"></nav>
+      <div class="side-status" id="providers"></div>
+    </aside>
+    <main>
+      <header class="topbar"><span>Review workspace</span><button id="top-add" class="button quiet" type="button">Thêm repository</button></header>
+      <div class="page" id="page" hidden>
+        <div class="heading">
+          <div><p class="tag" id="repo-type"></p><h1 id="repo-name"></h1><p class="muted" id="repo-ref"></p></div>
+          <div class="actions">
+            <button id="refresh" class="button quiet" type="button">Kiểm tra thay đổi</button>
+            <button id="upload" class="button quiet" type="button">Thêm ZIP</button>
+            <input id="extra-zip" type="file" accept=".zip" hidden>
+          </div>
+        </div>
+        <div class="stats">
+          <div><span>Snapshots</span><strong id="snapshot-count">0</strong></div>
+          <div><span>File nguồn</span><strong id="file-count">0</strong></div>
+          <div><span>Dòng nguồn</span><strong id="line-count">0</strong></div>
+          <div><span>Head</span><strong class="hash" id="latest-sha">—</strong></div>
+        </div>
+        <section class="panel review-controls" aria-labelledby="review-heading">
+          <div class="section-heading"><div><h2 id="review-heading">Review thay đổi</h2><p class="muted">Chọn hai snapshot và nguồn ngữ cảnh.</p></div><button id="config" type="button" class="button quiet">Cấu hình CodeLens</button></div>
+          <div class="fields">
+            <label>Base snapshot<select id="base"></select></label>
+            <label>Head snapshot<select id="head"></select></label>
+            <label>Provider<select id="provider"></select></label>
+          </div>
+          <div class="actions run-actions"><button id="run" class="button primary" type="button">Chạy review</button><button id="compare" class="button quiet" type="button">So sánh CodeLens và Graphify</button></div>
+          <p class="notice" id="status" role="status" aria-live="polite"></p>
+        </section>
+        <div class="output-grid">
+          <section class="panel results" aria-labelledby="result-heading">
+            <div class="section-heading"><h2 id="result-heading">Kết quả review</h2><button id="export" class="button quiet" type="button" hidden>Tải JSON</button></div>
+            <div id="result" aria-live="polite"></div>
+          </section>
+          <section class="panel history" aria-labelledby="history-heading"><h2 id="history-heading">Lịch sử</h2><div id="history"></div></section>
+        </div>
+        <details class="panel inventory"><summary>Phân tích snapshot</summary><div id="files"></div></details>
+      </div>
+      <p class="boot-message" id="boot-message" role="status">Đang tải workspace…</p>
+    </main>
+  </div>
+  <dialog id="project-dialog">
+    <form id="project-form">
+      <div class="section-heading"><h2>Thêm repository</h2><button type="button" class="small close" aria-label="Đóng">×</button></div>
+      <label>Nguồn<select id="source-kind"><option value="github">GitHub public</option><option value="zip">Tải ZIP</option></select></label>
+      <label>Tên hiển thị<input id="project-name" maxlength="100" placeholder="Ví dụ Pricing service"></label>
+      <div id="github-fields" class="dialog-fields">
+        <label>GitHub owner/repo<input id="github-repo" placeholder="owner/repo" maxlength="170"></label>
+        <label>Branch hoặc commit<input id="git-ref" value="main" maxlength="180"></label>
+        <label>Base ref <span class="muted">(tuỳ chọn)</span><input id="git-base" placeholder="Branch, tag hoặc SHA để review ngay" maxlength="180"></label>
+      </div>
+      <div id="zip-fields" class="dialog-fields" hidden><label>ZIP nguồn<input id="zip-file" type="file" accept=".zip"></label></div>
+      <p id="project-error" class="notice error" role="status"></p>
+      <button class="button primary" type="submit">Thêm repository</button>
+    </form>
+  </dialog>
+  <dialog id="config-dialog">
+    <form id="config-form">
+      <div class="section-heading"><h2>Cấu hình CodeLens</h2><button type="button" class="small close" aria-label="Đóng">×</button></div>
+      <label>GitLab project ID<input id="codelens-id" type="number" min="1"></label>
+      <label>Branch trong index<input id="codelens-branch" maxlength="180"></label>
+      <label>CodeLens branch ID <span class="muted">(tuỳ chọn)</span><input id="branch-id" type="number" min="1"></label>
+      <p class="muted">Branch ID dùng để đối chiếu SHA khi REST context thiếu revision.</p>
+      <p id="config-error" class="notice error" role="status"></p>
+      <button class="button primary" type="submit">Lưu cấu hình</button>
+    </form>
+  </dialog>
+</body>
+</html>

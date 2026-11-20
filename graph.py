@@ -185,7 +185,7 @@ def run_review(
                 gaps.append(f"{name}:{result['reason']}")
             trace.append({'node': 'call_tools', 'tool': name, 'status': result['status'],
                           'path': args.path if args else None, 'reason': result.get('reason'),
-                          'sha': result.get('sha')})
+                          'sha': result.get('sha'), 'revision_evidence': result.get('data', {}).get('revision_evidence')})
             messages.append({'role': 'tool', 'tool_call_id': call['id'],
                              'content': json.dumps(result, ensure_ascii=False)})
         return {'messages': messages, 'evidence': evidence, 'trace': trace, 'gaps': gaps,

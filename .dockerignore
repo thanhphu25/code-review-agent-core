@@ -6,3 +6,6 @@
 !cli.py
 !demo.py
 !graph.py
+!dashboard*.py
+!static/
+!static/**
