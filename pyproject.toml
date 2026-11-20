@@ -3,9 +3,9 @@ requires = ["setuptools>=75.8.2"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "code-review-benchmark"
+name = "code-review-agent-core"
 version = "0.1.0"
-description = "Standalone LangGraph agent for evaluating code review and code context providers"
+description = "Reusable LangGraph core for code-review agents"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -14,10 +14,10 @@ dependencies = [
 ]
 
 [project.scripts]
-review-benchmark = "review_benchmark.cli:main"
+review-agent = "review_agent_core.cli:main"
 
 [tool.setuptools]
-packages = ["review_benchmark"]
+packages = ["review_agent_core"]
 
 [tool.setuptools.package-dir]
-review_benchmark = "."
+review_agent_core = "."

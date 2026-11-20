@@ -2,8 +2,8 @@ import json
 import unittest
 from unittest.mock import Mock
 
-from review_benchmark.demo import CALLER_FILE, DEMO_INPUT, DEMO_SHA, demo_context, demo_reviewer, demo_source, run_demo
-from review_benchmark.graph import ModelReply, run_review
+from review_agent_core.demo import CALLER_FILE, DEMO_INPUT, DEMO_SHA, demo_context, demo_reviewer, demo_source, run_demo
+from review_agent_core.graph import ModelReply, run_review
 
 
 class ReviewCoreTests(unittest.TestCase):
