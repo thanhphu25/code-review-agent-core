@@ -17,6 +17,8 @@ class Store:
     def __init__(self, path: Path):
         self.path = path
         path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch(mode=0o600)
+        path.chmod(0o600)
         with self.connect() as db:
             db.executescript('''
                 CREATE TABLE IF NOT EXISTS projects (
@@ -32,6 +34,9 @@ class Store:
                 CREATE TABLE IF NOT EXISTS reviews (
                     id INTEGER PRIMARY KEY, project_id INTEGER REFERENCES projects(id),
                     provider TEXT NOT NULL, created_at TEXT NOT NULL, result TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS provider_settings (
+                    name TEXT PRIMARY KEY, value TEXT NOT NULL
                 );
             ''')
 

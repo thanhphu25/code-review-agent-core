@@ -13,9 +13,11 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
+from starlette.concurrency import run_in_threadpool
 
 from .dashboard_providers import LiveSettings, live_review
+from .dashboard_settings import ProviderPatch, ProviderSettings, public_settings
 from .dashboard_sources import MAX_ARCHIVE_BYTES, Snapshot, github_snapshot, inventory, read_archive, snapshot_diff
 from .dashboard_store import Store
 from .demo import CALLER_FILE, DEMO_INPUT, SIGNATURE_FILE, demo_source, run_demo
@@ -54,7 +56,7 @@ def _demo_snapshots() -> list[Snapshot]:
 
 def create_app(db_path: Path, settings: LiveSettings | None = None, password: str = '') -> FastAPI:
     store = Store(db_path)
-    settings = settings or LiveSettings.from_env()
+    providers = ProviderSettings(store, settings or LiveSettings.from_env())
     if not store.projects():
         store.create_project('Pricing demo', 'demo', _demo_snapshots())
     app = FastAPI(title='Code Review Agent', docs_url=None, redoc_url=None, openapi_url=None)
@@ -106,7 +108,34 @@ def create_app(db_path: Path, settings: LiveSettings | None = None, password: st
 
     @app.get('/api/projects')
     def list_projects():
-        return {'projects': store.projects(), 'available': settings.availability()}
+        return {'projects': store.projects(), 'available': providers.get().availability(),
+                'can_configure_providers': bool(password)}
+
+    @app.get('/api/provider-settings')
+    def provider_settings():
+        if not password:
+            raise HTTPException(403, 'Set a dashboard password before managing provider settings.')
+        return public_settings(providers.get())
+
+    @app.patch('/api/provider-settings')
+    async def update_provider_settings(request: Request):
+        if not password:
+            raise HTTPException(403, 'Set a dashboard password before managing provider settings.')
+        payload = bytearray()
+        async for chunk in request.stream():
+            if len(payload) + len(chunk) > 32 * 1024:
+                raise HTTPException(413, 'Provider settings exceed the request limit.')
+            payload.extend(chunk)
+        try:
+            patch = ProviderPatch.model_validate_json(payload)
+        except ValidationError as exc:
+            errors = exc.errors(include_input=False, include_context=False, include_url=False)
+            detail = [error['msg'] for error in errors]
+            raise HTTPException(422, ' · '.join(detail)) from None
+        try:
+            return public_settings(await run_in_threadpool(providers.save, patch))
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
 
     @app.post('/api/projects', status_code=201)
     def create_project(body: ProjectRequest):
@@ -164,15 +193,16 @@ def create_app(db_path: Path, settings: LiveSettings | None = None, password: st
         head = store.snapshot(project_id, body.head_id)
         if base is None or head is None or body.base_id == body.head_id:
             raise HTTPException(400, 'Choose two different snapshots of this repository.')
-        providers = list(dict.fromkeys(body.providers))
-        if ('demo' in providers and (project['kind'] != 'demo' or head.revision != DEMO_INPUT.head_sha)):
+        selected_providers = list(dict.fromkeys(body.providers))
+        if ('demo' in selected_providers and (project['kind'] != 'demo' or head.revision != DEMO_INPUT.head_sha)):
             raise HTTPException(400, 'The demo provider requires the seeded demo snapshot pair.')
         try:
             review_input, changed = snapshot_diff(base, head)
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
+        settings = providers.get()
         records = []
-        for provider in providers:
+        for provider in selected_providers:
             try:
                 result = run_demo() if provider == 'demo' else live_review(settings, provider, project, head, review_input)
             except (ReviewUnavailable, ValueError) as exc:

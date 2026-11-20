@@ -1,6 +1,7 @@
 import io
 import importlib.util
 import json
+import stat
 import tempfile
 import unittest
 import zipfile
@@ -108,6 +109,65 @@ class DashboardTests(unittest.TestCase):
         with TestClient(create_app(self.database, LiveSettings(), 'local-password')) as protected:
             self.assertEqual(protected.get('/api/projects').status_code, 401)
             self.assertEqual(protected.get('/api/projects', auth=('review', 'local-password')).status_code, 200)
+
+    def test_provider_settings_require_password_and_reject_cross_origin(self):
+        path = '/api/provider-settings'
+        self.assertEqual(self.browser.get(path).status_code, 403)
+        self.assertEqual(self.browser.patch(path, json={'model_key': 'sample'}).status_code, 403)
+        with TestClient(create_app(self.database, LiveSettings(), 'local-password')) as protected:
+            self.assertEqual(protected.get(path).status_code, 401)
+            self.assertEqual(protected.patch(path, json={'model_key': 'sample'}).status_code, 401)
+            response = protected.patch(path, auth=('review', 'local-password'),
+                                       headers={'Origin': 'http://another.test'}, json={'model_key': 'sample'})
+            self.assertEqual(response.status_code, 403)
+
+    def test_provider_settings_persist_and_apply_to_reviews(self):
+        project_id = self.create_zip_project()
+        prefix = f'/api/projects/{project_id}'
+        head, base = self.browser.get(prefix).json()['snapshots']
+        auth = ('review', 'local-password')
+        path = '/api/provider-settings'
+        changes = {'model_url': 'https://gateway.test/v1', 'model': 'review-model', 'model_key': 'model-secret',
+                   'graphify_url': 'http://127.0.0.1:18081/mcp/project', 'graphify_token': 'graph-secret',
+                   'graphify_sha': 'D' * 40, 'codelens_url': 'https://codelens.test/api/v1/rag',
+                   'codelens_token': 'lens-secret'}
+        with TestClient(create_app(self.database, LiveSettings(), auth[1])) as protected:
+            response = protected.patch(path, auth=auth, json=changes)
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json()['available'], {'model': True, 'graphify': True, 'codelens': True})
+            self.assertEqual(response.json()['fields']['graphify_sha'], 'd' * 40)
+            for key in ('model_key', 'graphify_token', 'codelens_token'):
+                self.assertNotIn(changes[key], response.text)
+            self.assertEqual(protected.patch(path, auth=auth, json={'model': 'updated-model'}).status_code, 200)
+        self.assertEqual(stat.S_IMODE(self.database.stat().st_mode), 0o600)
+        with TestClient(create_app(self.database, LiveSettings(model_key='environment-key'), auth[1])) as restarted:
+            self.assertTrue(restarted.get(path, auth=auth).json()['has_key']['model_key'])
+            with patch('review_agent_core.dashboard.live_review', return_value={}) as run:
+                response = restarted.post(prefix + '/review', auth=auth, json={
+                    'base_id': base['id'], 'head_id': head['id'], 'providers': ['graphify'],
+                })
+            self.assertEqual(response.status_code, 200, response.text)
+            settings = run.call_args.args[0]
+            self.assertEqual((settings.model, settings.model_key, settings.graphify_token),
+                             ('updated-model', 'model-secret', 'graph-secret'))
+
+    def test_changes_to_endpoint_cannot_reuse_saved_key_implicitly(self):
+        path = '/api/provider-settings'
+        auth = ('review', 'local-password')
+        defaults = LiveSettings(graphify_url='http://127.0.0.1:18081/mcp/first', graphify_token='env-token',
+                                graphify_sha='a' * 40)
+        new_url = 'http://127.0.0.1:18081/mcp/second'
+        with TestClient(create_app(self.database, defaults, auth[1])) as protected:
+            response = protected.patch(path, auth=auth, json={'graphify_url': new_url})
+            self.assertEqual(response.status_code, 400)
+            response = protected.patch(path, auth=auth, json={'graphify_url': new_url, 'graphify_token': 'invalid secret'})
+            self.assertEqual(response.status_code, 422)
+            self.assertNotIn('invalid secret', response.text)
+            response = protected.patch(path, auth=auth, json={'graphify_url': new_url, 'graphify_token': ''})
+            self.assertEqual(response.status_code, 200)
+            self.assertFalse(response.json()['has_key']['graphify_token'])
+            self.assertEqual(response.json()['fields']['graphify_sha'], '')
+            self.assertEqual(response.json()['fields']['graphify_url'], new_url)
 
 
 class ProviderContractTests(unittest.TestCase):

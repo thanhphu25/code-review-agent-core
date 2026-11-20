@@ -48,7 +48,9 @@ Mở `http://127.0.0.1:8765`. Chọn **Pricing demo** và bấm **Chạy review*
 - **ZIP** nhận các snapshot tải lên lần lượt. Dùng `git archive --format=zip -o head.zip HEAD` để giữ SHA trong ZIP. ZIP thông thường dùng dấu vân tay nội dung. Source được đọc trong bộ nhớ và giới hạn kích thước. Mục **Phân tích snapshot** liệt kê file text và số dòng. Chọn hai snapshot để tạo diff và chạy agent.
 - **Kết quả** hiển thị finding kèm quote, trace tool, token nếu gateway cung cấp và thời gian chạy. Chọn mục lịch sử để mở lại run.
 
-Khi khởi động dashboard trên máy chủ, nạp các biến môi trường ở server. Khi bind ngoài loopback, đặt `REVIEW_DASHBOARD_PASSWORD` rồi đăng nhập bằng username `review`. Với truy cập qua mạng, phục vụ sau HTTPS trên reverse proxy.
+Khi bind ngoài loopback, đặt `REVIEW_DASHBOARD_PASSWORD` rồi đăng nhập bằng username `review`. Chọn **Kết nối** để cấu hình URL và key của model, Graphify hoặc CodeLens. Cấu hình áp dụng từ lượt review tiếp theo và được lưu trong cơ sở dữ liệu của dashboard, với quyền đọc/ghi dành cho tài khoản chạy agent. Key chỉ hiển thị trạng thái đã cấu hình. Để trống ô key để giữ giá trị hoặc dùng hộp chọn để xóa. Cấu hình đã lưu có ưu tiên hơn biến môi trường.
+
+Nếu Graphify Pilot và agent chạy trực tiếp trên cùng máy, có thể dùng chung port trên hai địa chỉ khác nhau. Bind Graphify vào `127.0.0.1:18081` với origin `http://127.0.0.1:18081`, và bind agent vào đúng IP LAN của máy, ví dụ `review-agent serve --host 192.168.1.10 --port 18081`. Trong **Kết nối**, điền MCP URL dạng `http://127.0.0.1:18081/mcp/PROJECT_ID`. Dùng HTTPS hoặc SSH tunnel khi nhập key qua trình duyệt.
 
 ```bash
 docker build -t code-review-agent-core .
@@ -67,13 +69,13 @@ docker run --rm -p 127.0.0.1:8765:8765 --env-file /path/to/review.env \
 | `CODELENS_API_BASE` | REST base như `https://codelens.example/api/v1/rag` |
 | `CODELENS_API_TOKEN` | Token REST của CodeLens |
 
-Ba biến `CODEDECK_AGENT_LLM_*` của bản thử trước cũng dùng được nếu đã cấu hình.
+Các biến trong bảng dùng làm mặc định. Ba biến `CODEDECK_AGENT_LLM_*` của bản thử trước cũng dùng được nếu đã cấu hình.
 
 Sau khi CodeLens index branch, mở **Cấu hình CodeLens**, nhập GitLab project ID và branch. Nếu REST context không trả `indexed_sha`, nhập thêm CodeLens branch ID để dashboard so `head_sha` của index trước và sau truy vấn. SHA lệch trả gap và loại dữ liệu đó. Khi thiếu SHA, dữ liệu chỉ làm gợi ý và kết quả ghi `incomplete`.
 
 ### Graphify và so sánh
 
-Đặt `GRAPHIFY_MCP_URL` và `GRAPHIFY_API_KEY` theo phần **Kết nối MCP** của project Graphify Pilot. Dùng URL của một project đã index. `GRAPHIFY_INDEXED_SHA` khai báo SHA của ZIP đã dùng để dựng project đó nếu server chưa trả revision. Trace phân biệt khai báo này với SHA server trả.
+Điền MCP URL và project token trong **Kết nối** theo phần **Kết nối MCP** của project Graphify Pilot đã index. Có thể dùng `GRAPHIFY_MCP_URL` và `GRAPHIFY_API_KEY` làm mặc định. Trường **SHA đã index** (biến mặc định `GRAPHIFY_INDEXED_SHA`) khai báo SHA của ZIP đã dùng để dựng project đó nếu server chưa trả revision. Trace phân biệt khai báo này với SHA server trả.
 
 Chọn cùng base/head và bấm **So sánh CodeLens và Graphify**. Hai run nhận cùng diff, source, model và ngân sách tool. Dashboard đặt findings, thời gian, token và số lần truy vấn khớp SHA cạnh nhau. Có thể gọi riêng từng provider trong cùng workspace.
 

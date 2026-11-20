@@ -504,6 +504,44 @@ dialog .primary {
   justify-self: start;
 }
 
+#connections-dialog {
+  width: min(580px,calc(100% - 24px));
+}
+
+#connections-fields {
+  border: 0;
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 0;
+  margin: 0;
+}
+
+#connections-fields details {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.connection-fields {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+label.remove-key {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+}
+
+.remove-key input {
+  width: auto;
+  min-height: 0;
+  margin: 0;
+}
+
 @media(max-width:900px) {
   .workspace {
     grid-template-columns: 185px minmax(0,1fr);
@@ -544,6 +582,9 @@ dialog .primary {
   }
   .topbar {
     height: 55px;
+  }
+  .topbar .actions {
+    gap: 6px;
   }
   .page {
     padding: 20px 12px 32px;

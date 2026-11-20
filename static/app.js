@@ -67,9 +67,22 @@ function updateControls() {
   const liveReady = state.available.model && state.available.codelens && state.available.graphify;
   $('run').disabled = state.busy || !ready || !$('provider').value;
   $('compare').disabled = state.busy || !ready || !liveReady || detail?.project.kind === 'demo';
-  for (const id of ['base', 'head', 'provider', 'refresh', 'upload', 'config', 'add-project', 'top-add']) {
+  for (const id of ['base', 'head', 'provider', 'refresh', 'upload', 'config', 'add-project', 'top-add',
+    'connections', 'save-connections']) {
     $(id).disabled = state.busy;
   }
+}
+
+function renderProviderOptions(selected) {
+  const choices = state.detail.project.kind === 'demo' ? ['demo'] : ['codelens', 'graphify'];
+  $('provider').replaceChildren(...choices.map((key) => {
+    const available = key === 'demo' || (state.available.model && state.available[key]);
+    const item = option(available ? providers[key] : `${providers[key]} · chưa cấu hình`, key);
+    item.disabled = !available;
+    return item;
+  }));
+  const enabled = [...$('provider').options].filter((item) => !item.disabled);
+  $('provider').value = enabled.find((item) => item.value === selected)?.value || enabled[0]?.value || '';
 }
 
 function renderProject() {
@@ -92,15 +105,7 @@ function renderProject() {
     $(id).replaceChildren(...snapshots.map((item) => option(`${shortSha(item.revision)} · ${time(item.created_at)}`, item.id)));
   }
   if (snapshots.length > 1) $('base').value = snapshots[1].id;
-  const choices = project.kind === 'demo' ? ['demo'] : ['codelens', 'graphify'];
-  $('provider').replaceChildren(...choices.map((key) => {
-    const available = key === 'demo' || (state.available.model && state.available[key]);
-    const item = option(available ? providers[key] : `${providers[key]} · chưa cấu hình`, key);
-    item.disabled = !available;
-    return item;
-  }));
-  const next = [...$('provider').options].find((item) => !item.disabled);
-  $('provider').value = next?.value || '';
+  renderProviderOptions();
   $('files').replaceChildren(...inventory.paths.map((file) => {
     const row = element('div', null, 'file-row');
     row.append(element('span', file.path), element('span', `${file.lines} dòng`));
@@ -185,6 +190,7 @@ async function loadProjects(selected) {
   const data = await api('/api/projects');
   state.projects = data.projects;
   state.available = data.available;
+  $('connections').hidden = !data.can_configure_providers;
   if (data.projects.length) await choose(selected || data.projects[0].id);
 }
 
@@ -231,6 +237,48 @@ function runReview(keys) {
 
 for (const id of ['add-project', 'top-add']) $(id).onclick = () => $('project-dialog').showModal();
 for (const button of document.querySelectorAll('dialog .close')) button.onclick = () => button.closest('dialog').close();
+const connectionFields = $('connections-form').elements;
+let currentConnections;
+$('connections').onclick = () => job(async () => {
+  currentConnections = await api('/api/provider-settings');
+  for (const [name, value] of Object.entries(currentConnections.fields)) {
+    connectionFields[name].value = value;
+  }
+  for (const [name, configured] of Object.entries(currentConnections.has_key)) {
+    const remove = connectionFields[`remove_${name}`];
+    connectionFields[name].value = '';
+    connectionFields[name].disabled = false;
+    connectionFields[name].placeholder = configured ? 'Đã cấu hình · để trống để giữ' : '';
+    remove.checked = false;
+    remove.closest('label').hidden = !configured;
+    remove.onchange = () => connectionFields[name].disabled = remove.checked;
+  }
+  $('connections-transport').hidden = window.isSecureContext;
+  showStatus('', false, 'connections-status');
+  showStatus('');
+  $('connections-dialog').showModal();
+}, 'Đang tải cấu hình kết nối…');
+$('connections-dialog').addEventListener('close', () => $('connections-form').reset());
+$('connections-form').onsubmit = (event) => {
+  event.preventDefault();
+  job(async () => {
+    const changes = {};
+    for (const [name, current] of Object.entries(currentConnections.fields)) {
+      const value = connectionFields[name].value.trim();
+      if (value !== current) changes[name] = value;
+    }
+    for (const name of Object.keys(currentConnections.has_key)) {
+      const value = connectionFields[name].value.trim();
+      if (connectionFields[`remove_${name}`].checked) changes[name] = '';
+      else if (value) changes[name] = value;
+    }
+    const data = await api('/api/provider-settings', {method: 'PATCH', body: changes});
+    state.available = data.available;
+    if (state.detail) renderProviderOptions($('provider').value);
+    $('connections-dialog').close();
+    showStatus('Đã lưu cấu hình kết nối.');
+  }, 'Đang lưu kết nối…', 'connections-status');
+};
 $('source-kind').onchange = () => {
   const zip = $('source-kind').value === 'zip';
   $('github-fields').hidden = zip;

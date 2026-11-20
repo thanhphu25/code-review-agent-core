@@ -17,7 +17,13 @@
       <div class="side-status" id="providers"></div>
     </aside>
     <main>
-      <header class="topbar"><span>Review workspace</span><button id="top-add" class="button quiet" type="button">Thêm repository</button></header>
+      <header class="topbar">
+        <span>Review workspace</span>
+        <div class="actions">
+          <button id="connections" class="button quiet" type="button" hidden>Kết nối</button>
+          <button id="top-add" class="button quiet" type="button">Thêm repository</button>
+        </div>
+      </header>
       <div class="page" id="page" hidden>
         <div class="heading">
           <div><p class="tag" id="repo-type"></p><h1 id="repo-name"></h1><p class="muted" id="repo-ref"></p></div>
@@ -79,6 +85,42 @@
       <p class="muted">Branch ID dùng để đối chiếu SHA khi REST context thiếu revision.</p>
       <p id="config-error" class="notice error" role="status"></p>
       <button class="button primary" type="submit">Lưu cấu hình</button>
+    </form>
+  </dialog>
+  <dialog id="connections-dialog" aria-labelledby="connections-heading">
+    <form id="connections-form" action="/api/provider-settings" method="post" autocomplete="off">
+      <div class="section-heading"><h2 id="connections-heading">Cấu hình kết nối</h2><button type="button" class="small close" aria-label="Đóng">×</button></div>
+      <p class="notice" id="connections-transport" hidden>HTTP không mã hóa key và token. Dùng HTTPS hoặc SSH tunnel khi nhập key thật.</p>
+      <p class="notice" id="connections-status" role="status" aria-live="polite"></p>
+      <fieldset id="connections-fields">
+        <details open>
+          <summary>Model</summary>
+          <div class="connection-fields">
+            <label>Gateway URL<input name="model_url" type="url" maxlength="2048" placeholder="https://gateway.example/v1"></label>
+            <label>Model alias<input name="model" maxlength="200"></label>
+            <label>API key<input name="model_key" type="password" maxlength="4096" autocomplete="new-password"></label>
+            <label class="remove-key" hidden><input type="checkbox" name="remove_model_key"> Xóa key đã cấu hình</label>
+          </div>
+        </details>
+        <details open>
+          <summary>Graphify</summary>
+          <div class="connection-fields">
+            <label>MCP URL<input name="graphify_url" type="url" maxlength="2048" placeholder="http://127.0.0.1:18081/mcp/PROJECT_ID"></label>
+            <label>Project token<input name="graphify_token" type="password" maxlength="4096" autocomplete="new-password"></label>
+            <label class="remove-key" hidden><input type="checkbox" name="remove_graphify_token"> Xóa token đã cấu hình</label>
+            <label>SHA đã index <span class="muted">(tuỳ chọn)</span><input name="graphify_sha" maxlength="64" spellcheck="false"></label>
+          </div>
+        </details>
+        <details>
+          <summary>CodeLens</summary>
+          <div class="connection-fields">
+            <label>REST base URL<input name="codelens_url" type="url" maxlength="2048" placeholder="https://codelens.example/api/v1/rag"></label>
+            <label>REST token<input name="codelens_token" type="password" maxlength="4096" autocomplete="new-password"></label>
+            <label class="remove-key" hidden><input type="checkbox" name="remove_codelens_token"> Xóa token đã cấu hình</label>
+          </div>
+        </details>
+      </fieldset>
+      <button class="button primary" id="save-connections" type="submit">Lưu kết nối</button>
     </form>
   </dialog>
 </body>
