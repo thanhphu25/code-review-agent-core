@@ -114,10 +114,36 @@ def graphify_archive(snapshot: Snapshot) -> bytes:
     return output.getvalue()
 
 
-def github_snapshot(client: httpx.Client, repo: str, ref: str) -> Snapshot:
+def _github_api(repo: str, ref: str) -> str:
     if not GITHUB_REPO.fullmatch(repo) or '..' in repo or not ref or len(ref) > 180:
         raise ValueError('Enter a public GitHub repository as owner/repo and a branch or commit.')
-    api = f'https://api.github.com/repos/{repo}'
+    return f'https://api.github.com/repos/{repo}'
+
+
+def github_commits(client: httpx.Client, repo: str, ref: str, page: int) -> dict:
+    response = client.get(f'{_github_api(repo, ref)}/commits', params={'sha': ref, 'per_page': 20, 'page': page})
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, list):
+        raise ValueError('GitHub did not return a commit list.')
+    commits = []
+    try:
+        for item in payload:
+            sha = item.get('sha', '')
+            if not HEX_SHA.fullmatch(sha):
+                raise ValueError('GitHub did not return a commit SHA.')
+            metadata = item['commit']
+            subject = metadata['message'].partition('\n')[0].strip()[:200]
+            parent = next(iter(item.get('parents', [])), {}).get('sha', '')
+            commits.append({'sha': sha, 'subject': subject, 'date': metadata['committer']['date'],
+                            'parent_sha': parent if HEX_SHA.fullmatch(parent) else None})
+    except (AttributeError, KeyError, TypeError) as exc:
+        raise ValueError('GitHub returned incomplete commit metadata.') from exc
+    return {'commits': commits, 'has_more': 'next' in response.links}
+
+
+def github_snapshot(client: httpx.Client, repo: str, ref: str) -> Snapshot:
+    api = _github_api(repo, ref)
     response = client.get(f'{api}/commits/{quote(ref, safe="")}')
     response.raise_for_status()
     sha = response.json().get('sha', '')

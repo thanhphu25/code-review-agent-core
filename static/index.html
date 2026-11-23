@@ -71,6 +71,7 @@
             </div>
             <div class="actions snapshot-actions">
               <button id="diff" class="button quiet" type="button">Xem diff</button>
+              <button id="choose-commits" class="button quiet" type="button" hidden>Chọn commit GitHub</button>
               <button id="refresh" class="button quiet" type="button">Kiểm tra thay đổi</button>
               <button id="upload" class="button quiet" type="button">Thêm ZIP</button>
             </div>
@@ -112,6 +113,7 @@
       <label id="session-source-field" hidden>Nguồn base và head
         <select id="session-source">
           <option value="saved">Snapshot đã lưu</option>
+          <option value="history">Lịch sử commit GitHub</option>
           <option value="github">Nhập commit hoặc ref GitHub</option>
         </select>
       </label>
@@ -122,6 +124,16 @@
       <div id="session-github-pair" class="session-pair" hidden>
         <label>Base commit hoặc ref<input id="session-base-ref" maxlength="180" placeholder="Ví dụ v1.2.0" spellcheck="false"></label>
         <label>Head commit hoặc ref<input id="session-head-ref" maxlength="180" placeholder="Ví dụ 734c844" spellcheck="false"></label>
+      </div>
+      <div id="session-commit-history" class="dialog-fields" hidden>
+        <div class="session-pair">
+          <label>Base commit<select id="history-base"></select></label>
+          <label>Head commit<select id="history-head"></select></label>
+        </div>
+        <div class="actions">
+          <button id="history-more" class="button quiet" type="button">Tải commit cũ hơn</button>
+          <p id="commit-history-status" class="notice" role="status"></p>
+        </div>
       </div>
       <section id="session-related" class="session-related" aria-labelledby="session-related-heading">
         <h3 id="session-related-heading">Repo liên quan</h3>

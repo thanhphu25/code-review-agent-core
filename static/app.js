@@ -120,7 +120,7 @@ function updateControls() {
   $('compare').hidden = Boolean(state.session);
   $('compare').disabled = state.busy || !havePair || !available.graphify || !available.codelens;
   $('index').disabled = state.busy || !head || ['queued', 'indexing'].includes(state.index.status);
-  for (const id of ['refresh', 'upload', 'config', 'add-project', 'connections', 'save-connections', 'focus']) {
+  for (const id of ['refresh', 'upload', 'choose-commits', 'config', 'add-project', 'connections', 'save-connections', 'focus']) {
     $(id).disabled = state.busy;
   }
   for (const id of ['base', 'head', 'mode-graphify', 'mode-codelens']) {
@@ -129,6 +129,7 @@ function updateControls() {
   for (const id of ['new-session', 'attach-repository']) {
     $(id).disabled = state.busy || (!havePair && project?.kind !== 'github');
   }
+  updateSessionSubmit();
   const relatedCount = state.scope.length - 1;
   const context = providers[state.mode] + ' · ' + shortSha(base?.revision) + ' → ' + shortSha(head?.revision);
   $('composer-context').textContent = relatedCount > 0 ? context + ' · ' + relatedCount + ' repo liên quan' : context;
@@ -249,6 +250,7 @@ function renderProject({pair} = {}) {
     project.kind === 'github' ? project.github_repo + ' · ' + project.ref :
     project.kind === 'zip' ? 'Snapshot từ ZIP' : 'Dữ liệu mẫu để thử luồng review';
   $('refresh').hidden = project.kind !== 'github';
+  $('choose-commits').hidden = project.kind !== 'github';
   $('upload').hidden = project.kind !== 'zip';
   $('modes').hidden = demo;
   $('demo-mode').hidden = !demo;
@@ -257,6 +259,10 @@ function renderProject({pair} = {}) {
     $(id).replaceChildren(...snapshots.map((item) => option(shortSha(item.revision) + ' · ' + time(item.created_at), item.id)));
   }
   if (snapshots.length > 1) $('base').value = snapshots[1].id;
+  else {
+    $('base').prepend(option('Chọn base', ''));
+    $('base').value = '';
+  }
   if (state.session) pair = {base: String(state.session.base_id), head: String(state.session.head_id)};
   if (pair) {
     for (const id of ['base', 'head']) {
@@ -352,7 +358,9 @@ function renderThread() {
   $('suggestions').hidden = Boolean(turns.length);
   if (!turns.length) {
     const intro = element('section', null, 'welcome');
-    const copy = state.detail.snapshots.length < 2 ? 'Thêm một snapshot nữa để tạo diff và bắt đầu review.' :
+    const copy = state.detail.snapshots.length < 2 ?
+      (state.detail.project.kind === 'github' ? 'Chọn commit GitHub để lấy base và tạo diff.' :
+        'Thêm một snapshot nữa để tạo diff và bắt đầu review.') :
       state.mode === 'demo' ? 'Chạy ca mẫu để xem agent tìm lỗi ở một file nằm ngoài diff.' :
         state.session ? 'Gửi yêu cầu review cho các snapshot đã ghim.' :
           'Chọn base và head, rồi gửi yêu cầu để bắt đầu phiên chat.';
@@ -558,6 +566,7 @@ $('add-project').onclick = () => $('project-dialog').showModal();
 $('quick-review').onclick = () => openSession(null);
 $('new-session').onclick = () => openSessionDialog();
 $('attach-repository').onclick = () => openSessionDialog({copyScope: true});
+$('choose-commits').onclick = () => openSessionDialog({copyScope: true, fromHistory: true});
 for (const button of $('suggestions').querySelectorAll('button')) {
   button.onclick = () => {
     $('focus').value = button.dataset.focus;
@@ -586,6 +595,7 @@ $('export').onclick = () => {
 };
 
 let draftScope = [];
+let commitHistory;
 
 function snapshotOptions(snapshots) {
   return snapshots.map((item) => option(shortSha(item.revision) + ' · ' + time(item.created_at), item.id));
@@ -614,7 +624,7 @@ function renderDraftScope() {
   }));
 }
 
-function openSessionDialog({copyScope = false} = {}) {
+function openSessionDialog({copyScope = false, fromHistory = false} = {}) {
   const {project, snapshots} = state.detail;
   const pair = selectedPair();
   const demo = project.kind === 'demo';
@@ -626,8 +636,12 @@ function openSessionDialog({copyScope = false} = {}) {
   $('session-base').value = pair.base;
   $('session-head').value = pair.head;
   const github = project.kind === 'github';
+  commitHistory = {projectId: project.id, items: [], page: 1, anchor: null, hasMore: true, loading: false, manualBase: false};
+  $('history-base').replaceChildren();
+  $('history-head').replaceChildren();
+  showStatus('', false, 'commit-history-status');
   $('session-source-field').hidden = !github;
-  $('session-source').value = github && pair.base === pair.head ? 'github' : 'saved';
+  $('session-source').value = github && (fromHistory || !pair.base || !pair.head || pair.base === pair.head) ? 'history' : 'saved';
   $('session-head-ref').value = github ? project.ref || '' : '';
   updateSessionSource();
   $('session-related').hidden = demo;
@@ -635,21 +649,92 @@ function openSessionDialog({copyScope = false} = {}) {
   renderDraftScope();
   showStatus('', false, 'session-error');
   $('session-dialog').showModal();
-  if (copyScope && !$('related-project').disabled) $('related-project').focus();
+  if (copyScope && !fromHistory && !$('related-project').disabled) $('related-project').focus();
+}
+
+function updateSessionSubmit() {
+  const source = $('session-source').value;
+  const fields = source === 'history' ? ['history-base', 'history-head'] : ['session-base', 'session-head'];
+  const [base, head] = fields.map((id) => $(id).value);
+  $('save-session').disabled = state.busy || (source !== 'github' && (!base || !head || base === head));
 }
 
 function updateSessionSource() {
-  const github = $('session-source').value === 'github';
-  $('session-saved-pair').hidden = github;
+  const source = $('session-source').value;
+  const saved = source === 'saved';
+  const github = source === 'github';
+  $('session-saved-pair').hidden = !saved;
   $('session-github-pair').hidden = !github;
-  for (const id of ['session-base', 'session-head']) $(id).disabled = github;
+  $('session-commit-history').hidden = source !== 'history';
+  for (const id of ['session-base', 'session-head']) $(id).disabled = !saved;
   for (const id of ['session-base-ref', 'session-head-ref']) {
     $(id).disabled = !github;
     $(id).required = github;
   }
+  updateSessionSubmit();
+  if (source === 'history' && commitHistory.page === 1) loadCommitHistory();
 }
 
 $('session-source').onchange = updateSessionSource;
+$('session-base').onchange = updateSessionSubmit;
+$('session-head').onchange = updateSessionSubmit;
+
+function renderCommitChoices() {
+  const items = commitHistory.items;
+  const head = $('history-head').value || items[0]?.sha || '';
+  const commit = items.find((item) => item.sha === head);
+  const base = commitHistory.manualBase ? $('history-base').value : commit?.parent_sha || '';
+  const choices = items.map((item) => {
+    const date = Number.isNaN(Date.parse(item.date)) ? '' : time(item.date);
+    return [[shortSha(item.sha), date, item.subject].filter(Boolean).join(' · '), item.sha];
+  });
+  $('history-head').replaceChildren(...choices.map(([label, value]) => option(label, value)));
+  $('history-head').value = head;
+  $('history-base').replaceChildren(option('Chọn base', ''), ...choices.map(([label, value]) => option(label, value)));
+  if (base && !items.some((item) => item.sha === base)) {
+    $('history-base').append(option(shortSha(base) + ' · commit cha', base));
+  }
+  $('history-base').value = base;
+  updateSessionSubmit();
+}
+
+async function loadCommitHistory() {
+  const request = commitHistory;
+  if (request.loading || !request.hasMore) return;
+  request.loading = true;
+  $('history-more').disabled = true;
+  showStatus('Đang tải lịch sử commit…', false, 'commit-history-status');
+  try {
+    const params = new URLSearchParams({page: request.page});
+    if (request.anchor) params.set('anchor', request.anchor);
+    const data = await api('/api/projects/' + request.projectId + '/commits?' + params);
+    if (commitHistory !== request) return;
+    const items = new Map(request.items.map((item) => [item.sha, item]));
+    for (const item of data.commits) items.set(item.sha, item);
+    request.items = [...items.values()];
+    request.anchor = data.anchor;
+    request.hasMore = data.has_more;
+    request.page += 1;
+    renderCommitChoices();
+    showStatus(request.items.length ? '' : 'GitHub chưa trả commit cho ref này.', false, 'commit-history-status');
+  } catch (error) {
+    if (commitHistory === request) showStatus(error.message, true, 'commit-history-status');
+  } finally {
+    request.loading = false;
+    if (commitHistory === request) {
+      $('history-more').hidden = !request.hasMore;
+      $('history-more').disabled = false;
+      $('history-more').textContent = request.items.length ? 'Tải commit cũ hơn' : 'Tải lại lịch sử';
+    }
+  }
+}
+
+$('history-more').onclick = loadCommitHistory;
+$('history-head').onchange = renderCommitChoices;
+$('history-base').onchange = () => {
+  commitHistory.manualBase = Boolean($('history-base').value);
+  updateSessionSubmit();
+};
 
 let relatedChoices = [];
 $('related-project').onchange = async () => {
@@ -688,11 +773,10 @@ $('session-form').onsubmit = (event) => {
   event.preventDefault();
   job(async () => {
     if ($('related-project').value) throw new Error('Bấm Gắn vào phiên để lưu repo đang chọn hoặc bỏ lựa chọn.');
-    const pair = $('session-source').value === 'github' ? {
-      base_ref: $('session-base-ref').value.trim(), head_ref: $('session-head-ref').value.trim(),
-    } : {
-      base_id: Number($('session-base').value), head_id: Number($('session-head').value),
-    };
+    const source = $('session-source').value;
+    const pair = source === 'history' ? {base_ref: $('history-base').value, head_ref: $('history-head').value} :
+      source === 'github' ? {base_ref: $('session-base-ref').value.trim(), head_ref: $('session-head-ref').value.trim()} :
+        {base_id: Number($('session-base').value), head_id: Number($('session-head').value)};
     const data = await api(sessionPath(null), {method: 'POST', body: {
       title: $('session-title').value.trim(),
       provider: $('session-provider').value,
@@ -704,7 +788,7 @@ $('session-form').onsubmit = (event) => {
     await loadProject(state.selected, {sessionId: data.session.id});
     $('session-dialog').close();
     $('focus').focus();
-  }, $('session-source').value === 'github' ? 'Đang tải base và head từ GitHub…' : 'Đang tạo phiên…', 'session-error');
+  }, $('session-source').value === 'saved' ? 'Đang tạo phiên…' : 'Đang tải base và head từ GitHub…', 'session-error');
 };
 
 $('base').onchange = updateControls;

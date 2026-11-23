@@ -18,7 +18,7 @@ from review_agent_core.dashboard import create_app
 from review_agent_core.dashboard_graphify import PilotIndexer
 from review_agent_core.dashboard_providers import CodeLensLookup, LiveSettings
 from review_agent_core.dashboard_settings import ProviderSettings
-from review_agent_core.dashboard_sources import Snapshot, github_snapshot, read_archive
+from review_agent_core.dashboard_sources import Snapshot, github_commits, github_snapshot, read_archive
 from review_agent_core.dashboard_store import Store
 
 
@@ -342,8 +342,45 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(equal.status_code, 400)
         self.assertEqual(len(browser.get(prefix).json()['sessions']), 1)
 
+    def test_commit_history_uses_metadata_and_reuses_the_saved_head(self):
+        head = Snapshot('f' * 40, {'pricing.py': 'fee = 9\n'}, 'github')
+        base = Snapshot('d' * 40, {'pricing.py': 'fee = 3\n'}, 'github')
+        listing = {'commits': [{'sha': head.revision, 'parent_sha': base.revision}], 'has_more': True}
+        with patch('review_agent_core.dashboard.github_snapshot', side_effect=[head, base]) as fetch:
+            created = self.browser.post('/api/projects', json={'kind': 'github', 'repo': 'owner/repo', 'ref': 'main'})
+            prefix = f"/api/projects/{created.json()['id']}"
+            with patch('review_agent_core.dashboard.github_commits', return_value=listing) as history:
+                first = self.browser.get(prefix + '/commits')
+                self.assertEqual(first.json()['anchor'], head.revision)
+                self.browser.get(prefix + '/commits', params={'page': 2, 'anchor': head.revision})
+            self.assertEqual([call.args[1:] for call in history.call_args_list],
+                             [('owner/repo', head.revision, 1), ('owner/repo', head.revision, 2)])
+            self.assertEqual(len(self.browser.get(prefix).json()['snapshots']), 1)
+            session = self.browser.post(prefix + '/sessions', json={
+                'provider': 'graphify', 'base_ref': base.revision, 'head_ref': head.revision,
+            })
+        self.assertEqual(session.status_code, 201, session.text)
+        self.assertEqual([call.args[2] for call in fetch.call_args_list], ['main', base.revision])
+
 
 class ProviderContractTests(unittest.TestCase):
+    def test_github_commit_listing_follows_requested_page_and_reports_first_parent(self):
+        head, parent = 'f' * 40, 'd' * 40
+
+        def request(req):
+            self.assertEqual(req.url.path, '/repos/owner/repo/commits')
+            self.assertEqual(dict(req.url.params), {'sha': head, 'per_page': '20', 'page': '2'})
+            return httpx.Response(200, headers={'Link': '<https://api.github.com/repos/owner/repo/commits?page=3>; rel="next"'},
+                                  json=[{'sha': head, 'parents': [{'sha': parent}, {'sha': 'a' * 40}],
+                                         'commit': {'message': 'Adjust pricing\n\nLong description',
+                                                    'committer': {'date': '2026-11-23T04:30:00Z'}}}])
+
+        with httpx.Client(transport=httpx.MockTransport(request)) as http:
+            result = github_commits(http, 'owner/repo', head, 2)
+        self.assertTrue(result['has_more'])
+        self.assertEqual(result['commits'][0]['subject'], 'Adjust pricing')
+        self.assertEqual(result['commits'][0]['parent_sha'], parent)
+
     def test_github_reads_archive_at_resolved_sha(self):
         sha = 'e' * 40
 

@@ -5,16 +5,16 @@ import binascii
 import json
 import os
 import secrets
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import replace
 from pathlib import Path
 from threading import Thread
-from typing import Literal
+from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
 import httpx
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request, UploadFile
+from fastapi import FastAPI, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError, model_validator
@@ -23,7 +23,9 @@ from starlette.concurrency import run_in_threadpool
 from .dashboard_graphify import PilotIndexer, account
 from .dashboard_providers import LiveSettings, RelatedTarget, live_review
 from .dashboard_settings import ProviderPatch, ProviderSettings, public_settings
-from .dashboard_sources import MAX_ARCHIVE_BYTES, MAX_DIFF_CHARS, Snapshot, github_snapshot, inventory, read_archive, snapshot_diff
+from .dashboard_sources import (
+    HEX_SHA, MAX_ARCHIVE_BYTES, MAX_DIFF_CHARS, Snapshot, github_commits, github_snapshot, inventory, read_archive, snapshot_diff,
+)
 from .dashboard_store import Store
 from .demo import CALLER_FILE, DEMO_INPUT, SIGNATURE_FILE, demo_source, run_demo
 from .graph import RelatedRepository, ReviewUnavailable
@@ -146,16 +148,29 @@ def create_app(db_path: Path, settings: LiveSettings | None = None, password: st
             raise HTTPException(404, 'Repository not found.')
         return project
 
-    def fetch_github(repo: str, ref: str) -> Snapshot:
+    @contextmanager
+    def github_client():
         try:
             with httpx.Client(timeout=18, headers={'User-Agent': 'code-review-agent-core'}) as http:
-                return github_snapshot(http, repo, ref)
+                yield http
         except httpx.HTTPStatusError as exc:
             raise HTTPException(502, f'GitHub returned HTTP {exc.response.status_code}. Check the public repo, ref and rate limit.') from exc
         except httpx.HTTPError as exc:
             raise HTTPException(502, 'GitHub could not be reached.') from exc
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
+
+    def fetch_github(repo: str, ref: str) -> Snapshot:
+        with github_client() as http:
+            return github_snapshot(http, repo, ref)
+
+    def snapshot_for_github_ref(project: dict, ref: str) -> tuple[int | Snapshot, Snapshot]:
+        cached_id = store.snapshot_id_at_revision(project['id'], ref.lower()) if HEX_SHA.fullmatch(ref.lower()) else None
+        if cached_id is not None:
+            snapshot = store.snapshot(project['id'], cached_id)
+            return cached_id, snapshot
+        snapshot = fetch_github(project['github_repo'], ref)
+        return snapshot, snapshot
 
     def auto_graphify(provider: str) -> tuple[str, str] | None:
         if provider == 'graphify':
@@ -286,6 +301,21 @@ def create_app(db_path: Path, settings: LiveSettings | None = None, password: st
         pilot.wake.set()
         return {'changed': changed, 'revision': latest.revision}
 
+    @app.get('/api/projects/{project_id}/commits')
+    def commit_history(project_id: int, page: Annotated[int, Query(ge=1)] = 1,
+                       anchor: Annotated[str | None, Query(pattern=r'^[0-9a-f]{40}$')] = None):
+        project = get_project(project_id)
+        if project['kind'] != 'github':
+            raise HTTPException(400, 'Lịch sử commit chỉ áp dụng cho repository GitHub public.')
+        if anchor is None:
+            snapshots = store.snapshots(project_id)
+            anchor = snapshots[0]['revision'] if snapshots else project['ref']
+        with github_client() as http:
+            result = github_commits(http, project['github_repo'], anchor, page)
+        if not HEX_SHA.fullmatch(anchor) and result['commits']:
+            anchor = result['commits'][0]['sha']
+        return {**result, 'anchor': anchor if HEX_SHA.fullmatch(anchor) else None}
+
     @app.post('/api/projects/{project_id}/snapshots')
     async def upload(project_id: int, file: UploadFile, index: bool = True):
         project = get_project(project_id)
@@ -348,11 +378,10 @@ def create_app(db_path: Path, settings: LiveSettings | None = None, password: st
         if body.base_ref:
             if project['kind'] != 'github':
                 raise HTTPException(400, 'Nhập commit hoặc ref trực tiếp chỉ áp dụng cho repository GitHub public.')
-            base = fetch_github(project['github_repo'], body.base_ref)
-            head = fetch_github(project['github_repo'], body.head_ref)
+            pinned_base, base = snapshot_for_github_ref(project, body.base_ref)
+            pinned_head, head = snapshot_for_github_ref(project, body.head_ref)
             if base.revision == head.revision:
                 raise HTTPException(400, 'Base và head đang trỏ tới cùng một commit.')
-            pinned_base, pinned_head = base, head
         else:
             pinned_base, pinned_head = body.base_id, body.head_id
             base, head = selected_snapshots(project_id, pinned_base, pinned_head)

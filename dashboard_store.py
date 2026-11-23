@@ -156,6 +156,12 @@ class Store:
                              (project_id, snapshot_id)).fetchone()
             return dict(row) if row else None
 
+    def snapshot_id_at_revision(self, project_id: int, revision: str) -> int | None:
+        with self.connect() as db:
+            row = db.execute('SELECT id FROM snapshots WHERE project_id=? AND revision=?',
+                             (project_id, revision)).fetchone()
+            return row['id'] if row else None
+
     def set_review_provider(self, project_id: int, provider: str):
         with self.connect() as db:
             db.execute('UPDATE projects SET review_provider=? WHERE id=?', (provider, project_id))
