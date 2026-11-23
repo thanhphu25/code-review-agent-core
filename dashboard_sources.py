@@ -3,8 +3,8 @@
 import difflib
 import hashlib
 import io
-import json
 import re
+import shutil
 import stat
 import zipfile
 from dataclasses import dataclass
@@ -28,6 +28,7 @@ class Snapshot:
     revision: str
     files: dict[str, str]
     provenance: str
+    archive: bytes | None = None
 
 
 def read_archive(content: bytes, git_sha: str | None = None, *, strip_root: bool = False) -> Snapshot:
@@ -70,12 +71,47 @@ def read_archive(content: bytes, git_sha: str | None = None, *, strip_root: bool
         raise ValueError('Upload a readable, unencrypted ZIP archive.') from exc
     if not files:
         raise ValueError('The archive contains no readable source files.')
+    archive = _pilot_archive(content, strip_root=strip_root)
     if git_sha:
-        return Snapshot(git_sha, files, 'github')
+        return Snapshot(git_sha, files, 'github', archive)
     if archive_sha:
-        return Snapshot(archive_sha, files, 'git_archive')
-    fingerprint = hashlib.sha256(json.dumps(files, sort_keys=True).encode()).hexdigest()
-    return Snapshot(f'zip-{fingerprint}', files, 'zip')
+        return Snapshot(archive_sha, files, 'git_archive', archive)
+    fingerprint = hashlib.sha256(archive).hexdigest()
+    return Snapshot(f'zip-{fingerprint}', files, 'zip', archive)
+
+
+def _pilot_archive(content: bytes, *, strip_root: bool) -> bytes:
+    """Keep the full source tree and add a root for Pilot to remove."""
+    output = io.BytesIO()
+    try:
+        with (zipfile.ZipFile(io.BytesIO(content)) as source,
+              zipfile.ZipFile(output, 'w', compression=zipfile.ZIP_DEFLATED) as target):
+            for entry in sorted(source.infolist(), key=lambda item: item.filename):
+                mode = stat.S_IFMT(entry.external_attr >> 16)
+                if entry.is_dir() or mode not in (0, stat.S_IFREG):
+                    continue
+                parts = validate_path(entry.filename).split('/')
+                if strip_root:
+                    parts = parts[1:]
+                if any(part.casefold() in IGNORED_DIRECTORIES | {'graphify-out'}
+                       or part.casefold().startswith(('.env', '.graphify')) for part in parts):
+                    continue
+                with source.open(entry) as incoming, target.open('repository/' + '/'.join(parts), 'w') as outgoing:
+                    shutil.copyfileobj(incoming, outgoing)
+    except (zipfile.BadZipFile, NotImplementedError, RuntimeError) as exc:
+        raise ValueError('Upload a readable, unencrypted ZIP archive.') from exc
+    return output.getvalue()
+
+
+def graphify_archive(snapshot: Snapshot) -> bytes:
+    if snapshot.archive is not None:
+        return snapshot.archive
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, 'w', compression=zipfile.ZIP_DEFLATED) as target:
+        for path, content in snapshot.files.items():
+            if not any(part.casefold().startswith(('.env', '.graphify')) for part in path.split('/')):
+                target.writestr(f'repository/{path}', content)
+    return output.getvalue()
 
 
 def github_snapshot(client: httpx.Client, repo: str, ref: str) -> Snapshot:

@@ -1,9 +1,10 @@
 import json
 import unittest
+from dataclasses import replace
 from unittest.mock import Mock
 
 from review_agent_core.demo import CALLER_FILE, DEMO_INPUT, DEMO_SHA, demo_context, demo_reviewer, demo_source, run_demo
-from review_agent_core.graph import ModelReply, run_review
+from review_agent_core.graph import ModelReply, RelatedRepository, RepositoryTools, run_review
 
 
 class ReviewCoreTests(unittest.TestCase):
@@ -71,3 +72,35 @@ class ReviewCoreTests(unittest.TestCase):
 
         self.assertEqual(result['status'], 'incomplete')
         self.assertEqual(result['gaps'], ['invalid_model_output'])
+
+    def test_related_search_and_findings_are_scoped_to_their_repository(self):
+        related = RelatedRepository('repo_2', 'Frontend', 'f' * 40)
+        repo_tools = RepositoryTools(lambda _path: 'return total([1])', Mock(),
+                                     lambda query: [{'path': CALLER_FILE, 'line': 1, 'text': query}])
+
+        def model(messages, tools):
+            if messages[-1]['role'] != 'tool':
+                self.assertIn('search_code', [tool['function']['name'] for tool in tools])
+                self.assertIn(related.head_sha, messages[-1]['content'])
+                calls = [
+                    ('search_code', {'query': 'total', 'repository': 'repo_2'}),
+                    ('read_file', {'path': CALLER_FILE, 'repository': 'repo_2'}),
+                    ('read_file', {'path': CALLER_FILE, 'repository': 'repo_99'}),
+                ]
+                return ModelReply({'role': 'assistant', 'tool_calls': [
+                    {'id': str(index), 'function': {'name': name, 'arguments': json.dumps(arguments)}}
+                    for index, (name, arguments) in enumerate(calls)
+                ]}, 'tool_calls')
+            observations = [json.loads(entry['content']) for entry in messages if entry['role'] == 'tool']
+            self.assertEqual(observations[0]['matches'][0]['path'], CALLER_FILE)
+            self.assertEqual(observations[1]['sha'], related.head_sha)
+            self.assertEqual(observations[2]['reason'], 'unknown_repository')
+            finding = {'path': CALLER_FILE, 'line': 1, 'claim': 'Stale caller', 'quote': 'return total([1])'}
+            findings = [{**finding, 'repository': 'primary'}, {**finding, 'repository': 'repo_2'}]
+            return ModelReply({'role': 'assistant', 'content': json.dumps({'findings': findings, 'gaps': []})}, 'stop')
+
+        result = run_review(replace(DEMO_INPUT, related=(related,)), model, demo_source, demo_context,
+                            related_tools={'repo_2': repo_tools})
+        self.assertEqual(len(result['findings']), 1)
+        self.assertEqual((result['findings'][0]['repository'], result['findings'][0]['sha']), ('repo_2', related.head_sha))
+        self.assertIn(f'unverified_quote:primary:{CALLER_FILE}:1', result['gaps'])

@@ -13,8 +13,10 @@ ENDPOINT_KEYS = {
     'model_url': 'model_key',
     'codelens_url': 'codelens_token',
     'graphify_url': 'graphify_token',
+    'graphify_pilot_url': 'graphify_pilot_password',
 }
 SECRET_FIELDS = set(ENDPOINT_KEYS.values())
+TOKEN_FIELDS = SECRET_FIELDS - {'graphify_pilot_password'}
 
 
 def validate_endpoint(value: str) -> str:
@@ -42,13 +44,23 @@ class ProviderPatch(BaseModel):
     graphify_url: str | None = Field(default=None, max_length=2048)
     graphify_token: str | None = Field(default=None, max_length=4096)
     graphify_sha: str | None = Field(default=None, max_length=64)
+    graphify_pilot_url: str | None = Field(default=None, max_length=2048)
+    graphify_pilot_user: str | None = Field(default=None, max_length=100)
+    graphify_pilot_password: str | None = Field(default=None, max_length=1024)
 
     @field_validator(*ENDPOINT_KEYS)
     @classmethod
     def endpoint(cls, value: str | None):
         return validate_endpoint(value) if value is not None else None
 
-    @field_validator(*SECRET_FIELDS)
+    @field_validator('graphify_pilot_url')
+    @classmethod
+    def pilot_origin(cls, value: str | None):
+        if value and urlsplit(value).path not in ('', '/'):
+            raise ValueError('Nhập URL gốc của Graphify Pilot, không kèm đường dẫn MCP.')
+        return value.rstrip('/') if value is not None else None
+
+    @field_validator(*TOKEN_FIELDS)
     @classmethod
     def key(cls, value: str | None):
         if value is None:
@@ -68,7 +80,7 @@ class ProviderPatch(BaseModel):
             raise ValueError('Nhập SHA đầy đủ của commit đã index.')
         return value
 
-    @field_validator('model')
+    @field_validator('model', 'graphify_pilot_user')
     @classmethod
     def model_name(cls, value: str | None):
         return value.strip() if value is not None else None
@@ -96,6 +108,9 @@ class ProviderSettings:
                 if (endpoint in changes and changes[endpoint] != getattr(current, endpoint)
                         and getattr(current, key) and key not in changes):
                     raise ValueError('Khi đổi URL, hãy nhập lại key hoặc chọn xóa key của kết nối đó.')
+            if ('graphify_pilot_user' in changes and changes['graphify_pilot_user'] != current.graphify_pilot_user
+                    and current.graphify_pilot_password and 'graphify_pilot_password' not in changes):
+                raise ValueError('Khi đổi tài khoản Pilot, hãy nhập lại mật khẩu.')
             if 'graphify_url' in changes and changes['graphify_url'] != current.graphify_url:
                 changes.setdefault('graphify_sha', '')
             db.executemany('INSERT OR REPLACE INTO provider_settings VALUES (?, ?)', changes.items())
@@ -103,7 +118,8 @@ class ProviderSettings:
 
 
 def public_settings(settings: LiveSettings) -> dict:
-    fields = {name: value for name, value in asdict(settings).items() if name not in SECRET_FIELDS}
+    fields = {name: value for name, value in asdict(settings).items()
+              if name not in SECRET_FIELDS and name != 'graphify_revision_evidence'}
     for endpoint in ENDPOINT_KEYS:
         try:
             fields[endpoint] = validate_endpoint(fields[endpoint])

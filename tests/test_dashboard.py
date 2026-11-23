@@ -15,8 +15,11 @@ import httpx
 from fastapi.testclient import TestClient
 
 from review_agent_core.dashboard import create_app
+from review_agent_core.dashboard_graphify import PilotIndexer
 from review_agent_core.dashboard_providers import CodeLensLookup, LiveSettings
+from review_agent_core.dashboard_settings import ProviderSettings
 from review_agent_core.dashboard_sources import Snapshot, github_snapshot, read_archive
+from review_agent_core.dashboard_store import Store
 
 
 def zipped(files, sha=''):
@@ -134,7 +137,8 @@ class DashboardTests(unittest.TestCase):
         with TestClient(create_app(self.database, LiveSettings(), auth[1])) as protected:
             response = protected.patch(path, auth=auth, json=changes)
             self.assertEqual(response.status_code, 200, response.text)
-            self.assertEqual(response.json()['available'], {'model': True, 'graphify': True, 'codelens': True})
+            self.assertEqual(response.json()['available'],
+                             {'model': True, 'graphify': True, 'codelens': True, 'graphify_pilot': False})
             self.assertEqual(response.json()['fields']['graphify_sha'], 'd' * 40)
             for key in ('model_key', 'graphify_token', 'codelens_token'):
                 self.assertNotIn(changes[key], response.text)
@@ -168,6 +172,175 @@ class DashboardTests(unittest.TestCase):
             self.assertFalse(response.json()['has_key']['graphify_token'])
             self.assertEqual(response.json()['fields']['graphify_sha'], '')
             self.assertEqual(response.json()['fields']['graphify_url'], new_url)
+
+    def test_graphify_auto_indexes_only_head_and_reuses_project_after_restart(self):
+        settings = LiveSettings(graphify_pilot_url='http://pilot.test', graphify_pilot_user='tester',
+                                graphify_pilot_password='pilot-password', model='test-model')
+        store = Store(self.database)
+        indexer = PilotIndexer(store, ProviderSettings(store, settings))
+        account = (settings.graphify_pilot_url, settings.graphify_pilot_user)
+        browser = TestClient(create_app(self.database, settings))
+        self.addCleanup(browser.close)
+        info = browser.post('/api/projects', json={'name': 'Auto index', 'kind': 'zip'})
+        prefix = f"/api/projects/{info.json()['id']}"
+        base_sha, head_sha = 'a' * 40, 'b' * 40
+        for sha, path, code, enabled in [
+            (base_sha, 'src/main.py', 'value = 1', 'false'),
+            (head_sha, 'src/main.py', 'value = 2', 'true'),
+        ]:
+            archive = zipped({path: code, 'src/helper.py': 'def read(): return 1', '.env': 'HIDDEN=secret'}, sha)
+            response = browser.post(prefix + f'/snapshots?index={enabled}', files={'file': ('repo.zip', archive)})
+            self.assertEqual(response.status_code, 200, response.text)
+        head, base = browser.get(prefix).json()['snapshots']
+        self.assertEqual((head['graphify']['status'], base['graphify']['status']), ('queued', 'not_indexed'))
+
+        projects = []
+        uploads = []
+        def pilot(request):
+            path = request.url.path
+            if path == '/api/login':
+                return httpx.Response(200, headers={'Set-Cookie': 'pilot=session; Path=/'}, json={'ok': True})
+            if request.method == 'GET':
+                return httpx.Response(200, json=projects)
+            if path == '/api/projects':
+                with zipfile.ZipFile(io.BytesIO(request.content)) as sent:
+                    uploads.append(sent.namelist())
+                projects.append({'id': 'pilot-project', 'title': request.url.params['title'], 'status': 'ready'})
+                return httpx.Response(202, json={'id': 'pilot-project'})
+            self.assertEqual(path, '/api/projects/pilot-project/token')
+            return httpx.Response(200, json={'token': 'private-mcp-token'})
+
+        with httpx.Client(base_url=account[0], transport=httpx.MockTransport(pilot)) as client:
+            job = store.claim_graphify(*account)
+            self.assertEqual(job['snapshot_id'], head['id'])
+            indexer.advance(client, account[1], settings.graphify_pilot_password, job)
+            store.update_graphify(job['id'], 'indexing', remote_id='pilot-project')
+            indexer.advance(client, account[1], settings.graphify_pilot_password, store.claim_graphify(*account))
+        self.assertEqual(uploads, [['repository/src/helper.py', 'repository/src/main.py']])
+
+        with TestClient(create_app(self.database, settings)) as restarted:
+            status_url = prefix + f"/snapshots/{head['id']}/graphify"
+            status = restarted.post(status_url)
+            self.assertEqual(status.json()['status'], 'ready')
+            self.assertNotIn('private-mcp-token', status.text)
+            self.assertIsNone(store.claim_graphify(*account))
+            payload = {'base_id': base['id'], 'head_id': head['id'], 'providers': ['graphify'],
+                       'focus': 'Kiểm tra caller'}
+            with patch('review_agent_core.dashboard.live_review',
+                       return_value={'base_sha': base_sha, 'head_sha': head_sha, 'findings': [], 'gaps': []}) as run:
+                review = restarted.post(prefix + '/review', json=payload).json()['reviews'][0]
+                connection = run.call_args.args[0]
+                self.assertEqual(connection.graphify_url, 'http://pilot.test/mcp/pilot-project')
+                self.assertEqual(connection.graphify_token, 'private-mcp-token')
+                self.assertEqual(connection.graphify_sha, head_sha)
+                self.assertEqual(connection.graphify_revision_evidence, 'graphify_agent_upload')
+                self.assertEqual(run.call_args.args[4].focus, payload['focus'])
+                follow_up = restarted.post(prefix + '/review', json={**payload, 'follow_up_to': review['id']})
+                self.assertEqual(follow_up.status_code, 200, follow_up.text)
+                self.assertIn('Kiểm tra caller', run.call_args.args[4].previous_review)
+
+    def test_codelens_mode_does_not_send_zip_to_graphify(self):
+        browser = TestClient(create_app(self.database, LiveSettings(graphify_pilot_url='http://pilot.test',
+                                   graphify_pilot_user='tester', graphify_pilot_password='pilot-password')))
+        self.addCleanup(browser.close)
+        project = browser.post('/api/projects', json={
+            'name': 'CodeLens project', 'kind': 'zip', 'review_provider': 'codelens',
+        }).json()
+        prefix = f"/api/projects/{project['id']}"
+        for code in ('value = 1', 'value = 2'):
+            response = browser.post(prefix + '/snapshots', files={'file': ('repo.zip', zipped({'main.py': code}))})
+            self.assertEqual(response.status_code, 200)
+        detail = browser.get(prefix).json()
+        self.assertEqual(detail['project']['review_provider'], 'codelens')
+        head, base = detail['snapshots']
+        self.assertEqual(head['graphify']['status'], 'not_indexed')
+        diff = browser.get(prefix + '/diff', params={'base_id': base['id'], 'head_id': head['id']})
+        self.assertEqual(diff.json()['changed_files'], ['main.py'])
+        self.assertIn('+value = 2', diff.json()['diff'])
+
+    def test_session_pins_related_diffs_and_isolates_followups_across_restart(self):
+        primary = self.create_zip_project()
+        related = self.create_zip_project()
+        prefix = f'/api/projects/{primary}'
+        nested = f'/api/projects/{related}'
+        primary_head, primary_base = self.browser.get(prefix).json()['snapshots']
+        related_head, related_base = self.browser.get(nested).json()['snapshots']
+        payload = {'title': 'API change', 'provider': 'codelens', 'base_id': primary_base['id'],
+                   'head_id': primary_head['id'], 'related': [
+                       {'project_id': related, 'base_id': related_base['id'], 'head_id': related_head['id']},
+                   ]}
+        bad = self.browser.post(prefix + '/sessions', json={
+            **payload, 'related': [{'project_id': related, 'head_id': primary_head['id']}],
+        })
+        self.assertEqual(bad.status_code, 400)
+        first = self.browser.post(prefix + '/sessions', json=payload)
+        self.assertEqual(first.status_code, 201, first.text)
+        session = first.json()['session']
+        self.assertEqual(first.json()['scope'][1]['head']['id'], related_head['id'])
+        first_path = prefix + f"/sessions/{session['id']}"
+        second = self.browser.post(prefix + '/sessions', json={**payload, 'title': 'Fresh review', 'related': []})
+        second_path = prefix + f"/sessions/{second.json()['session']['id']}"
+
+        with patch('review_agent_core.dashboard.live_review') as run:
+            run.return_value = {'base_sha': primary_base['revision'], 'head_sha': primary_head['revision'],
+                                'findings': [], 'gaps': []}
+            response = self.browser.post(first_path + '/turns', json={'focus': 'Check callers'})
+            self.assertEqual(response.status_code, 200, response.text)
+            review = response.json()['reviews'][0]
+            self.assertEqual(review['session_id'], session['id'])
+            self.assertIn('+fee = 1', run.call_args.args[4].related[0].diff)
+            self.assertEqual(run.call_args.kwargs['related'][0].project['id'], related)
+
+        newer = self.browser.post(prefix + '/snapshots', files={
+            'file': ('new-head.zip', zipped({'new_file.py': 'pass\n'}, 'e' * 40)),
+        })
+        self.assertEqual(newer.status_code, 200)
+        with TestClient(create_app(self.database, LiveSettings())) as restarted:
+            reopened = restarted.get(first_path).json()
+            self.assertEqual([record['id'] for record in reopened['reviews']], [review['id']])
+            self.assertEqual(reopened['scope'][1]['base']['id'], related_base['id'])
+            self.assertEqual([item['path'] for item in reopened['inventory']['paths']], ['pricing.py'])
+            self.assertEqual(restarted.get(second_path).json()['reviews'], [])
+            response = restarted.post(second_path + '/turns', json={'follow_up_to': review['id']})
+            self.assertEqual(response.status_code, 400)
+
+    def test_github_session_can_import_a_commit_pair_independently_of_tracked_branch(self):
+        tracked = Snapshot('f' * 40, {'pricing.py': 'fee = 9\n'}, 'github')
+        base = Snapshot('a' * 40, {'pricing.py': 'fee = 1\n'}, 'github')
+        head = Snapshot('d' * 40, {'pricing.py': 'fee = 3\n'}, 'github')
+        settings = LiveSettings(graphify_pilot_url='http://pilot.test', graphify_pilot_user='tester',
+                                graphify_pilot_password='pilot-password')
+        browser = TestClient(create_app(self.database, settings))
+        self.addCleanup(browser.close)
+        with patch('review_agent_core.dashboard.github_snapshot', side_effect=[tracked, base, head]) as fetch:
+            created = browser.post('/api/projects', json={
+                'kind': 'github', 'repo': 'owner/repo', 'ref': 'main', 'review_provider': 'codelens',
+            })
+            prefix = f"/api/projects/{created.json()['id']}"
+            prefix_ref = prefix + '/sessions'
+            response = browser.post(prefix_ref, json={
+                'provider': 'graphify', 'base_ref': ' v1.0.0 ', 'head_ref': 'd123456',
+            })
+        self.assertEqual(response.status_code, 201, response.text)
+        self.assertEqual([call.args[1:] for call in fetch.call_args_list],
+                         [('owner/repo', 'main'), ('owner/repo', 'v1.0.0'), ('owner/repo', 'd123456')])
+        data = response.json()
+        self.assertEqual(data['scope'][0]['base']['revision'], base.revision)
+        self.assertEqual(data['scope'][0]['head']['revision'], head.revision)
+        self.assertEqual(data['scope'][0]['graphify']['status'], 'queued')
+        detail = browser.get(prefix).json()
+        self.assertEqual(detail['project']['ref'], 'main')
+        self.assertEqual(detail['snapshots'][0]['revision'], tracked.revision)
+        self.assertEqual({snapshot['revision'] for snapshot in detail['snapshots']},
+                         {tracked.revision, base.revision, head.revision})
+        params = {key: data['session'][key] for key in ('base_id', 'head_id')}
+        diff = browser.get(prefix + '/diff', params=params).json()['diff']
+        self.assertIn('-fee = 1\n+fee = 3', diff)
+
+        with patch('review_agent_core.dashboard.github_snapshot', return_value=base):
+            equal = browser.post(prefix_ref, json={'provider': 'graphify', 'base_ref': 'tag', 'head_ref': 'branch'})
+        self.assertEqual(equal.status_code, 400)
+        self.assertEqual(len(browser.get(prefix).json()['sessions']), 1)
 
 
 class ProviderContractTests(unittest.TestCase):

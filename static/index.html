@@ -12,58 +12,137 @@
   <div class="workspace">
     <aside class="sidebar">
       <div class="brand"><span class="brand-mark" aria-hidden="true">⌘</span><span>Code Review Agent</span></div>
-      <div class="side-heading"><h2>Repository</h2><button id="add-project" type="button" class="small" aria-label="Thêm repository">+</button></div>
+      <button id="add-project" class="button add-repo" type="button"><span aria-hidden="true">+</span> Thêm repository</button>
+      <h2 class="side-heading">Repository</h2>
       <nav id="projects" aria-label="Các repository"></nav>
+      <section id="chat-navigation" class="chat-navigation" hidden aria-labelledby="sessions-heading">
+        <div class="section-heading">
+          <h2 id="sessions-heading" class="side-heading">Phiên chat</h2>
+          <button id="new-session" class="button quiet" type="button">+ Chat mới</button>
+        </div>
+        <button id="quick-review" class="repo-button" type="button">Review nhanh / so sánh</button>
+        <nav id="sessions" aria-label="Phiên chat của repository"></nav>
+      </section>
       <div class="side-status" id="providers"></div>
     </aside>
     <main>
       <header class="topbar">
-        <span>Review workspace</span>
+        <div class="workspace-title"><span>Review</span><span aria-hidden="true">/</span><strong id="breadcrumb">Workspace</strong></div>
         <div class="actions">
           <button id="connections" class="button quiet" type="button" hidden>Kết nối</button>
-          <button id="top-add" class="button quiet" type="button">Thêm repository</button>
         </div>
       </header>
       <div class="page" id="page" hidden>
-        <div class="heading">
-          <div><p class="tag" id="repo-type"></p><h1 id="repo-name"></h1><p class="muted" id="repo-ref"></p></div>
-          <div class="actions">
-            <button id="refresh" class="button quiet" type="button">Kiểm tra thay đổi</button>
-            <button id="upload" class="button quiet" type="button">Thêm ZIP</button>
-            <input id="extra-zip" type="file" accept=".zip" hidden>
+        <section class="conversation" aria-label="Review bằng chat">
+          <div class="conversation-heading">
+            <div><h1 id="repo-name"></h1><p id="repo-ref" class="muted"></p></div>
+            <div id="modes" class="modes" role="group" aria-label="Mode review">
+              <button id="mode-graphify" type="button" aria-pressed="true">Graphify</button>
+              <button id="mode-codelens" type="button" aria-pressed="false">CodeLens</button>
+            </div>
+            <span id="demo-mode" class="mode-label" hidden>Pricing demo</span>
           </div>
-        </div>
-        <div class="stats">
-          <div><span>Snapshots</span><strong id="snapshot-count">0</strong></div>
-          <div><span>File nguồn</span><strong id="file-count">0</strong></div>
-          <div><span>Dòng nguồn</span><strong id="line-count">0</strong></div>
-          <div><span>Head</span><strong class="hash" id="latest-sha">—</strong></div>
-        </div>
-        <section class="panel review-controls" aria-labelledby="review-heading">
-          <div class="section-heading"><div><h2 id="review-heading">Review thay đổi</h2><p class="muted">Chọn hai snapshot và nguồn ngữ cảnh.</p></div><button id="config" type="button" class="button quiet">Cấu hình CodeLens</button></div>
-          <div class="fields">
-            <label>Base snapshot<select id="base"></select></label>
-            <label>Head snapshot<select id="head"></select></label>
-            <label>Provider<select id="provider"></select></label>
+          <div class="thread" id="thread" aria-label="Kết quả review">
+            <div id="result"></div>
           </div>
-          <div class="actions run-actions"><button id="run" class="button primary" type="button">Chạy review</button><button id="compare" class="button quiet" type="button">So sánh CodeLens và Graphify</button></div>
-          <p class="notice" id="status" role="status" aria-live="polite"></p>
+          <div class="composer-area">
+            <div id="suggestions" class="suggestions" aria-label="Yêu cầu mẫu">
+              <button type="button" data-focus="Tìm các lỗi gây ra bởi thay đổi này.">Tìm lỗi trong thay đổi</button>
+              <button type="button" data-focus="Kiểm tra ảnh hưởng đến caller, callee và các file nằm ngoài diff.">Kiểm tra ảnh hưởng liên file</button>
+              <button type="button" data-focus="Tập trung vào các test có thể hỏng hoặc thiếu do thay đổi này.">Kiểm tra test bị ảnh hưởng</button>
+            </div>
+            <form id="composer" class="composer">
+              <label for="focus" class="visually-hidden">Yêu cầu review</label>
+              <textarea id="focus" maxlength="2000" rows="2" placeholder="Bạn muốn agent tập trung kiểm tra điều gì?"></textarea>
+              <div class="composer-footer">
+                <div class="composer-context" id="composer-context"></div>
+                <button id="run" class="button primary" type="submit">Chạy review <span aria-hidden="true">↑</span></button>
+              </div>
+            </form>
+            <p class="notice" id="status" role="status" aria-live="polite"></p>
+          </div>
         </section>
-        <div class="output-grid">
-          <section class="panel results" aria-labelledby="result-heading">
-            <div class="section-heading"><h2 id="result-heading">Kết quả review</h2><button id="export" class="button quiet" type="button" hidden>Tải JSON</button></div>
-            <div id="result" aria-live="polite"></div>
+        <aside class="inspector" aria-label="Ngữ cảnh review">
+          <section class="inspector-section" aria-labelledby="snapshots-heading">
+            <div class="section-heading"><h2 id="snapshots-heading">Snapshot repo chính</h2><span class="count" id="snapshot-count"></span></div>
+            <div class="fields">
+              <label>Base<select id="base"></select></label>
+              <label>Head<select id="head"></select></label>
+            </div>
+            <div class="actions snapshot-actions">
+              <button id="diff" class="button quiet" type="button">Xem diff</button>
+              <button id="refresh" class="button quiet" type="button">Kiểm tra thay đổi</button>
+              <button id="upload" class="button quiet" type="button">Thêm ZIP</button>
+            </div>
+            <details class="inventory">
+              <summary id="inventory-summary">File nguồn</summary>
+              <label for="file-filter" class="visually-hidden">Lọc file</label>
+              <input id="file-filter" type="search" placeholder="Lọc theo đường dẫn">
+              <div id="files"></div>
+            </details>
           </section>
-          <section class="panel history" aria-labelledby="history-heading"><h2 id="history-heading">Lịch sử</h2><div id="history"></div></section>
-        </div>
-        <details class="panel inventory"><summary>Phân tích snapshot</summary><div id="files"></div></details>
+          <section class="inspector-section" id="index-panel" aria-labelledby="index-heading">
+            <div class="section-heading"><h2 id="index-heading">Graphify index</h2><span class="index-state" id="index-state"></span></div>
+            <p class="muted" id="index-detail"></p>
+            <div class="actions snapshot-actions">
+              <button id="index" class="button quiet" type="button">Index head</button>
+              <button id="config" class="button quiet" type="button">Cấu hình CodeLens</button>
+            </div>
+            <button id="compare" class="button quiet compare" type="button">So sánh hai provider</button>
+          </section>
+          <section class="inspector-section" id="related-panel" aria-labelledby="related-heading">
+            <div class="section-heading"><h2 id="related-heading">Repo liên quan</h2></div>
+            <div id="related-repositories"></div>
+            <button id="attach-repository" class="button quiet snapshot-actions" type="button">Gắn repo</button>
+          </section>
+          <section class="inspector-section" aria-labelledby="history-heading">
+            <div class="section-heading"><h2 id="history-heading">Lịch sử</h2><button id="export" class="button quiet" type="button" hidden>Tải JSON</button></div>
+            <div id="history"></div>
+          </section>
+        </aside>
       </div>
       <p class="boot-message" id="boot-message" role="status">Đang tải workspace…</p>
     </main>
   </div>
+  <dialog id="session-dialog" aria-labelledby="session-heading">
+    <form id="session-form">
+      <div class="section-heading"><h2 id="session-heading">Chat mới</h2><button type="button" class="small close" aria-label="Đóng">×</button></div>
+      <label>Tên phiên <span class="muted">(tuỳ chọn)</span><input id="session-title" maxlength="100" placeholder="Ví dụ Review thay đổi API"></label>
+      <label>Mode<select id="session-provider"><option value="graphify">Graphify</option><option value="codelens">CodeLens</option><option value="demo">Pricing demo</option></select></label>
+      <label id="session-source-field" hidden>Nguồn base và head
+        <select id="session-source">
+          <option value="saved">Snapshot đã lưu</option>
+          <option value="github">Nhập commit hoặc ref GitHub</option>
+        </select>
+      </label>
+      <div id="session-saved-pair" class="session-pair">
+        <label>Base repo chính<select id="session-base" required></select></label>
+        <label>Head repo chính<select id="session-head" required></select></label>
+      </div>
+      <div id="session-github-pair" class="session-pair" hidden>
+        <label>Base commit hoặc ref<input id="session-base-ref" maxlength="180" placeholder="Ví dụ v1.2.0" spellcheck="false"></label>
+        <label>Head commit hoặc ref<input id="session-head-ref" maxlength="180" placeholder="Ví dụ 734c844" spellcheck="false"></label>
+      </div>
+      <section id="session-related" class="session-related" aria-labelledby="session-related-heading">
+        <h3 id="session-related-heading">Repo liên quan</h3>
+        <div id="draft-repositories"></div>
+        <label>Repository<select id="related-project"></select></label>
+        <div id="related-snapshots" hidden>
+          <div class="session-pair">
+            <label>Base <span class="muted">(tuỳ chọn)</span><select id="related-base"></select></label>
+            <label>Head<select id="related-head"></select></label>
+          </div>
+          <button id="add-related" class="button quiet snapshot-actions" type="button">Gắn vào phiên</button>
+        </div>
+      </section>
+      <p id="session-error" class="notice error" role="status"></p>
+      <button id="save-session" class="button primary" type="submit">Tạo phiên chat</button>
+    </form>
+  </dialog>
   <dialog id="project-dialog">
     <form id="project-form">
       <div class="section-heading"><h2>Thêm repository</h2><button type="button" class="small close" aria-label="Đóng">×</button></div>
+      <label>Mode review<select id="project-mode"><option value="graphify">Graphify</option><option value="codelens">CodeLens</option></select></label>
       <label>Nguồn<select id="source-kind"><option value="github">GitHub public</option><option value="zip">Tải ZIP</option></select></label>
       <label>Tên hiển thị<input id="project-name" maxlength="100" placeholder="Ví dụ Pricing service"></label>
       <div id="github-fields" class="dialog-fields">
@@ -71,10 +150,30 @@
         <label>Branch hoặc commit<input id="git-ref" value="main" maxlength="180"></label>
         <label>Base ref <span class="muted">(tuỳ chọn)</span><input id="git-base" placeholder="Branch, tag hoặc SHA để review ngay" maxlength="180"></label>
       </div>
-      <div id="zip-fields" class="dialog-fields" hidden><label>ZIP nguồn<input id="zip-file" type="file" accept=".zip"></label></div>
+      <div id="zip-fields" class="dialog-fields" hidden>
+        <label>ZIP base <span class="muted">(tuỳ chọn)</span><input id="zip-base" type="file" accept=".zip"></label>
+        <label>ZIP head<input id="zip-file" type="file" accept=".zip"></label>
+      </div>
+      <p class="muted" id="project-mode-note"></p>
       <p id="project-error" class="notice error" role="status"></p>
       <button class="button primary" type="submit">Thêm repository</button>
     </form>
+  </dialog>
+  <dialog id="upload-dialog">
+    <form id="upload-form">
+      <div class="section-heading"><h2>Thêm snapshot ZIP</h2><button type="button" class="small close" aria-label="Đóng">×</button></div>
+      <label>ZIP nguồn<input id="extra-zip" type="file" accept=".zip" required></label>
+      <label>Vai trò<select id="upload-role"><option value="head">Head</option><option value="base">Base</option></select></label>
+      <p id="upload-error" class="notice error" role="status"></p>
+      <button class="button primary" type="submit">Thêm snapshot</button>
+    </form>
+  </dialog>
+  <dialog id="diff-dialog" class="diff-dialog">
+    <div class="dialog-content">
+      <div class="section-heading"><h2>Diff base → head</h2><button type="button" class="small close" aria-label="Đóng">×</button></div>
+      <div id="diff-files" class="diff-files"></div>
+      <pre id="diff-content"></pre>
+    </div>
   </dialog>
   <dialog id="config-dialog">
     <form id="config-form">
@@ -103,7 +202,16 @@
           </div>
         </details>
         <details open>
-          <summary>Graphify</summary>
+          <summary>Graphify Pilot · tự động index</summary>
+          <div class="connection-fields">
+            <label>URL Graphify Pilot<input name="graphify_pilot_url" type="url" maxlength="2048" placeholder="http://127.0.0.1:18081"></label>
+            <label>Tài khoản Pilot<input name="graphify_pilot_user" maxlength="100" autocomplete="off"></label>
+            <label>Mật khẩu Pilot<input name="graphify_pilot_password" type="password" maxlength="1024" autocomplete="new-password"></label>
+            <label class="remove-key" hidden><input type="checkbox" name="remove_graphify_pilot_password"> Xóa mật khẩu đã lưu</label>
+          </div>
+        </details>
+        <details>
+          <summary>Graphify · MCP thủ công</summary>
           <div class="connection-fields">
             <label>MCP URL<input name="graphify_url" type="url" maxlength="2048" placeholder="http://127.0.0.1:18081/mcp/PROJECT_ID"></label>
             <label>Project token<input name="graphify_token" type="password" maxlength="4096" autocomplete="new-password"></label>
